@@ -1,0 +1,110 @@
+avg_velocity: !!python/object/apply:numpy.core.multiarray.scalar
+- &id001 !!python/object/apply:numpy.dtype
+  args:
+  - f8
+  - false
+  - true
+  state: !!python/tuple
+  - 3
+  - <
+  - null
+  - null
+  - null
+  - -1
+  - -1
+  - 0
+- !!binary |
+  yGbCyxjxtT8=
+bbox_x: !!python/object/apply:numpy.core.multiarray.scalar
+- *id001
+- !!binary |
+  JqwvQBJ+4T8=
+bbox_y: !!python/object/apply:numpy.core.multiarray.scalar
+- *id001
+- !!binary |
+  lrSEqghv4z8=
+bbox_z: !!python/object/apply:numpy.core.multiarray.scalar
+- *id001
+- !!binary |
+  ZrLlgFAjoz8=
+drift_per_meter: !!python/object/apply:numpy.core.multiarray.scalar
+- *id001
+- !!binary |
+  0UctfgfaWEA=
+drift_total: !!python/object/apply:numpy.core.multiarray.scalar
+- *id001
+- !!binary |
+  Q9226JUs6j8=
+drift_x: !!python/object/apply:numpy.core.multiarray.scalar
+- *id001
+- !!binary |
+  JqwvQBJ+4T8=
+drift_y: !!python/object/apply:numpy.core.multiarray.scalar
+- *id001
+- !!binary |
+  lrSEqghv4z8=
+drift_z: !!python/object/apply:numpy.core.multiarray.scalar
+- *id001
+- !!binary |
+  ZrLlgFAjoz8=
+duration: !!python/object/apply:numpy.core.multiarray.scalar
+- *id001
+- !!binary |
+  AAAAiD4zI0A=
+end_position:
+- 0.547012345
+- 0.62056789
+- 0.047026113
+num_poses: 50
+rpe_rot_mean: !!python/object/apply:numpy.core.multiarray.scalar
+- *id001
+- !!binary |
+  kAzIizArxz8=
+rpe_rot_rmse: !!python/object/apply:numpy.core.multiarray.scalar
+- *id001
+- !!binary |
+  kQNpuJ9ixz8=
+rpe_rot_std: !!python/object/apply:numpy.core.multiarray.scalar
+- *id001
+- !!binary |
+  pq6V5nRmmT8=
+rpe_trans_mean: !!python/object/apply:numpy.core.multiarray.scalar
+- *id001
+- !!binary |
+  CSv52Yrjtz8=
+rpe_trans_rmse: !!python/object/apply:numpy.core.multiarray.scalar
+- *id001
+- !!binary |
+  VAACEoLjuT8=
+rpe_trans_std: !!python/object/apply:numpy.core.multiarray.scalar
+- *id001
+- !!binary |
+  IM0WIG30oz8=
+start_position:
+- 0.000372783
+- 0.013263953
+- 0.00964731
+total_distance: !!python/object/apply:numpy.core.multiarray.scalar
+- *id001
+- !!binary |
+  Cr7BsZNU6j8=
+vel_max: !!python/object/apply:numpy.core.multiarray.scalar
+- *id001
+- !!binary |
+  sFYyVdodwz8=
+vel_mean: !!python/object/apply:numpy.core.multiarray.scalar
+- *id001
+- !!binary |
+  7uky0UajtT8=
+vel_median: !!python/object/apply:numpy.core.multiarray.scalar
+- *id001
+- !!binary |
+  3JrB3p5etT8=
+vel_min: !!python/object/apply:numpy.core.multiarray.scalar
+- *id001
+- !!binary |
+  VmwUaEtImD8=
+vel_std: !!python/object/apply:numpy.core.multiarray.scalar
+- *id001
+- !!binary |
+  Gj4QxBUgoz8=
