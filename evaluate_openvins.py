@@ -9,6 +9,7 @@ It computes standard trajectory evaluation metrics including:
 - Relative Pose Error (RPE)
 - Drift analysis
 - Trajectory statistics
+- Positioning error over time
 
 Author: AAE5303 Assignment 2
 Date: December 2024
@@ -17,6 +18,7 @@ Date: December 2024
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
+from mpl_toolkits.mplot3d import Axes3D
 import pandas as pd
 from scipy.spatial.transform import Rotation
 from scipy.interpolate import interp1d
@@ -41,10 +43,12 @@ class TrajectoryEvaluator:
             gt_file: Path to ground truth trajectory file (TUM format), optional
         """
         self.est_trajectory = self._load_trajectory(est_file)
-        self.gt_trajectory = self._load_trajectory(gt_file) if gt_file else None
+        self.gt_trajectory = self._load_trajectory(gt_file) if gt_file and os.path.exists(gt_file) else None
         self.aligned_est = None
         self.aligned_gt = None
         self.metrics = {}
+        self.position_errors = None
+        self.error_timestamps = None
         
     def _load_trajectory(self, filepath: str) -> np.ndarray:
         """
@@ -60,8 +64,20 @@ class TrajectoryEvaluator:
         """
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"Trajectory file not found: {filepath}")
+        
+        # Read file, skip comment lines
+        lines = []
+        with open(filepath, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    lines.append(line)
+        
+        if not lines:
+            raise ValueError(f"No data found in {filepath}")
             
-        data = np.loadtxt(filepath)
+        data = np.array([list(map(float, line.split())) for line in lines])
+        
         if data.ndim == 1:
             data = data.reshape(1, -1)
             
@@ -110,6 +126,10 @@ class TrajectoryEvaluator:
         self.aligned_est = est_interp.copy()
         self.aligned_est[:, 1:4] = aligned_pos
         self.aligned_gt = gt_interp.copy()
+        
+        # Compute position errors
+        self.position_errors = np.linalg.norm(aligned_pos - gt_pos, axis=1)
+        self.error_timestamps = est_interp[:, 0]
         
         print(f"Alignment: scale={s:.6f}, translation={np.linalg.norm(t):.4f}m")
         
@@ -211,12 +231,12 @@ class TrajectoryEvaluator:
         )
         
         ate_stats = {
-            'ate_rmse': np.sqrt(np.mean(pos_errors ** 2)),
-            'ate_mean': np.mean(pos_errors),
-            'ate_median': np.median(pos_errors),
-            'ate_std': np.std(pos_errors),
-            'ate_min': np.min(pos_errors),
-            'ate_max': np.max(pos_errors)
+            'ate_rmse': float(np.sqrt(np.mean(pos_errors ** 2))),
+            'ate_mean': float(np.mean(pos_errors)),
+            'ate_median': float(np.median(pos_errors)),
+            'ate_std': float(np.std(pos_errors)),
+            'ate_min': float(np.min(pos_errors)),
+            'ate_max': float(np.max(pos_errors))
         }
         
         self.metrics.update(ate_stats)
@@ -236,7 +256,7 @@ class TrajectoryEvaluator:
         if self.aligned_est is None:
             self.align_trajectories()
             
-        trajectory = self.aligned_est
+        trajectory = self.aligned_est if self.aligned_est is not None else self.est_trajectory
         timestamps = trajectory[:, 0]
         positions = trajectory[:, 1:4]
         
@@ -264,22 +284,25 @@ class TrajectoryEvaluator:
             q_j = trajectory[j, 4:8]
             
             # Compute relative rotation angle
-            r_i = Rotation.from_quat(q_i)
-            r_j = Rotation.from_quat(q_j)
-            rel_rot = r_i.inv() * r_j
-            rot_angle = np.abs(rel_rot.magnitude())
-            rot_errors.append(np.degrees(rot_angle))
+            try:
+                r_i = Rotation.from_quat(q_i)
+                r_j = Rotation.from_quat(q_j)
+                rel_rot = r_i.inv() * r_j
+                rot_angle = np.abs(rel_rot.magnitude())
+                rot_errors.append(np.degrees(rot_angle))
+            except:
+                rot_errors.append(0.0)
             
         trans_errors = np.array(trans_errors)
         rot_errors = np.array(rot_errors)
         
         rpe_stats = {
-            'rpe_trans_rmse': np.sqrt(np.mean(trans_errors ** 2)),
-            'rpe_trans_mean': np.mean(trans_errors),
-            'rpe_trans_std': np.std(trans_errors),
-            'rpe_rot_rmse': np.sqrt(np.mean(rot_errors ** 2)),
-            'rpe_rot_mean': np.mean(rot_errors),
-            'rpe_rot_std': np.std(rot_errors)
+            'rpe_trans_rmse': float(np.sqrt(np.mean(trans_errors ** 2))),
+            'rpe_trans_mean': float(np.mean(trans_errors)),
+            'rpe_trans_std': float(np.std(trans_errors)),
+            'rpe_rot_rmse': float(np.sqrt(np.mean(rot_errors ** 2))),
+            'rpe_rot_mean': float(np.mean(rot_errors)),
+            'rpe_rot_std': float(np.std(rot_errors))
         }
         
         self.metrics.update(rpe_stats)
@@ -306,13 +329,13 @@ class TrajectoryEvaluator:
         bbox_size = bbox_max - bbox_min
         
         stats = {
-            'total_distance': total_distance,
-            'duration': duration,
-            'avg_velocity': avg_velocity,
-            'num_poses': len(positions),
-            'bbox_x': bbox_size[0],
-            'bbox_y': bbox_size[1],
-            'bbox_z': bbox_size[2],
+            'total_distance': float(total_distance),
+            'duration': float(duration),
+            'avg_velocity': float(avg_velocity),
+            'num_poses': int(len(positions)),
+            'bbox_x': float(bbox_size[0]),
+            'bbox_y': float(bbox_size[1]),
+            'bbox_z': float(bbox_size[2]),
             'start_position': positions[0].tolist(),
             'end_position': positions[-1].tolist()
         }
@@ -344,12 +367,12 @@ class TrajectoryEvaluator:
         height_drift = positions[-1, 2] - positions[0, 2]
         
         drift_stats = {
-            'drift_total': end_to_start,
-            'drift_per_meter': drift_per_meter * 100,  # percentage
-            'drift_x': positions[-1, 0] - positions[0, 0],
-            'drift_y': positions[-1, 1] - positions[0, 1],
-            'drift_z': height_drift,
-            'total_distance': total_distance
+            'drift_total': float(end_to_start),
+            'drift_per_meter': float(drift_per_meter * 100),  # percentage
+            'drift_x': float(positions[-1, 0] - positions[0, 0]),
+            'drift_y': float(positions[-1, 1] - positions[0, 1]),
+            'drift_z': float(height_drift),
+            'total_distance': float(total_distance)
         }
         
         self.metrics.update(drift_stats)
@@ -375,210 +398,462 @@ class TrajectoryEvaluator:
         velocities = np.linalg.norm(dp, axis=1) / dt
         
         vel_stats = {
-            'vel_mean': np.mean(velocities),
-            'vel_std': np.std(velocities),
-            'vel_max': np.max(velocities),
-            'vel_min': np.min(velocities),
-            'vel_median': np.median(velocities)
+            'vel_mean': float(np.mean(velocities)),
+            'vel_std': float(np.std(velocities)),
+            'vel_max': float(np.max(velocities)),
+            'vel_min': float(np.min(velocities)),
+            'vel_median': float(np.median(velocities))
         }
         
         self.metrics.update(vel_stats)
         return vel_stats
     
-    def plot_trajectory_2d(self, save_path: Optional[str] = None):
+    def compute_positioning_error_over_time(self) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
         """
-        Plot 2D trajectory (top-down view).
+        Compute positioning error metrics over time.
+        
+        Returns:
+            Tuple of (timestamps, dict of error arrays)
+        """
+        trajectory = self.aligned_est if self.aligned_est is not None else self.est_trajectory
+        timestamps = trajectory[:, 0]
+        positions = trajectory[:, 1:4]
+        
+        # Relative time
+        rel_time = timestamps - timestamps[0]
+        
+        # Compute various positioning errors
+        errors = {}
+        
+        # 1. Distance from start (accumulated drift)
+        errors['drift_from_start'] = np.linalg.norm(positions - positions[0], axis=1)
+        
+        # 2. Per-axis displacement from start
+        errors['x_displacement'] = positions[:, 0] - positions[0, 0]
+        errors['y_displacement'] = positions[:, 1] - positions[0, 1]
+        errors['z_displacement'] = positions[:, 2] - positions[0, 2]
+        
+        # 3. Cumulative distance traveled
+        distances = np.linalg.norm(np.diff(positions, axis=0), axis=1)
+        errors['cumulative_distance'] = np.concatenate([[0], np.cumsum(distances)])
+        
+        # 4. If ground truth available, compute ATE over time
+        if self.aligned_gt is not None:
+            gt_positions = self.aligned_gt[:, 1:4]
+            errors['ate'] = np.linalg.norm(positions - gt_positions, axis=1)
+            errors['ate_x'] = np.abs(positions[:, 0] - gt_positions[:, 0])
+            errors['ate_y'] = np.abs(positions[:, 1] - gt_positions[:, 1])
+            errors['ate_z'] = np.abs(positions[:, 2] - gt_positions[:, 2])
+        
+        # 5. Instantaneous velocity
+        dt = np.diff(timestamps)
+        dt[dt < 1e-6] = 1e-6
+        velocities = np.linalg.norm(np.diff(positions, axis=0), axis=1) / dt
+        errors['velocity'] = np.concatenate([[0], velocities])
+        
+        return rel_time, errors
+    
+    def plot_trajectory_2d_with_gt(self, save_path: Optional[str] = None):
+        """
+        Plot 2D trajectory comparing VINs estimate with ground truth.
         
         Args:
             save_path: Path to save the figure
         """
-        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-        fig.suptitle('OpenVINS Trajectory Analysis', fontsize=14, fontweight='bold')
+        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+        fig.suptitle('OpenVINS 2D Trajectory Analysis\n(VINs Estimate vs Ground Truth)', 
+                    fontsize=14, fontweight='bold')
         
         est_pos = self.est_trajectory[:, 1:4]
+        has_gt = self.aligned_gt is not None
         
-        # XY plane (top-down)
-        axes[0].plot(est_pos[:, 0], est_pos[:, 1], 'b-', linewidth=1, label='Estimated')
-        axes[0].plot(est_pos[0, 0], est_pos[0, 1], 'go', markersize=10, label='Start')
-        axes[0].plot(est_pos[-1, 0], est_pos[-1, 1], 'r^', markersize=10, label='End')
-        
-        if self.aligned_gt is not None:
+        if has_gt:
             gt_pos = self.aligned_gt[:, 1:4]
-            axes[0].plot(gt_pos[:, 0], gt_pos[:, 1], 'g--', linewidth=1, 
-                        alpha=0.7, label='Ground Truth')
+            aligned_est_pos = self.aligned_est[:, 1:4]
+        
+        views = [
+            ('XY', 0, 1, 'Top-Down View'),
+            ('XZ', 0, 2, 'Side View'),
+            ('YZ', 1, 2, 'Front View')
+        ]
+        
+        for ax, (name, i, j, title) in zip(axes, views):
+            # Plot estimated trajectory (VINs)
+            ax.plot(est_pos[:, i], est_pos[:, j], 'b-', linewidth=2, 
+                   label='VINs Estimate', alpha=0.8)
             
-        axes[0].set_xlabel('X (m)')
-        axes[0].set_ylabel('Y (m)')
-        axes[0].set_title('Top-Down View (XY)')
-        axes[0].legend()
-        axes[0].axis('equal')
-        axes[0].grid(True, alpha=0.3)
-        
-        # XZ plane (side view)
-        axes[1].plot(est_pos[:, 0], est_pos[:, 2], 'b-', linewidth=1)
-        axes[1].plot(est_pos[0, 0], est_pos[0, 2], 'go', markersize=10)
-        axes[1].plot(est_pos[-1, 0], est_pos[-1, 2], 'r^', markersize=10)
-        
-        if self.aligned_gt is not None:
-            axes[1].plot(gt_pos[:, 0], gt_pos[:, 2], 'g--', linewidth=1, alpha=0.7)
+            # Plot ground truth if available
+            if has_gt:
+                ax.plot(gt_pos[:, i], gt_pos[:, j], 'g--', linewidth=2, 
+                       label='Ground Truth', alpha=0.7)
+                # Plot aligned estimate
+                ax.plot(aligned_est_pos[:, i], aligned_est_pos[:, j], 'r:', 
+                       linewidth=1.5, label='VINs (Aligned)', alpha=0.6)
             
-        axes[1].set_xlabel('X (m)')
-        axes[1].set_ylabel('Z (m)')
-        axes[1].set_title('Side View (XZ)')
-        axes[1].grid(True, alpha=0.3)
-        
-        # YZ plane (front view)
-        axes[2].plot(est_pos[:, 1], est_pos[:, 2], 'b-', linewidth=1)
-        axes[2].plot(est_pos[0, 1], est_pos[0, 2], 'go', markersize=10)
-        axes[2].plot(est_pos[-1, 1], est_pos[-1, 2], 'r^', markersize=10)
-        
-        if self.aligned_gt is not None:
-            axes[2].plot(gt_pos[:, 1], gt_pos[:, 2], 'g--', linewidth=1, alpha=0.7)
+            # Start and end markers
+            ax.plot(est_pos[0, i], est_pos[0, j], 'go', markersize=12, 
+                   markeredgecolor='black', markeredgewidth=2, label='Start', zorder=5)
+            ax.plot(est_pos[-1, i], est_pos[-1, j], 'r^', markersize=12, 
+                   markeredgecolor='black', markeredgewidth=2, label='End', zorder=5)
             
-        axes[2].set_xlabel('Y (m)')
-        axes[2].set_ylabel('Z (m)')
-        axes[2].set_title('Front View (YZ)')
-        axes[2].grid(True, alpha=0.3)
+            ax.set_xlabel(f'{name[0]} (m)', fontsize=11)
+            ax.set_ylabel(f'{name[1]} (m)', fontsize=11)
+            ax.set_title(title, fontsize=12, fontweight='bold')
+            ax.legend(loc='best', fontsize=9)
+            ax.grid(True, alpha=0.3)
+            ax.set_aspect('equal', adjustable='datalim')
         
         plt.tight_layout()
         
         if save_path:
-            plt.savefig(save_path, dpi=150, bbox_inches='tight')
-            print(f"Saved trajectory plot to {save_path}")
-        plt.show()
+            plt.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='white')
+            print(f"Saved 2D trajectory plot to {save_path}")
+        plt.close()
     
-    def plot_trajectory_3d(self, save_path: Optional[str] = None):
+    def plot_positioning_error_over_time(self, save_path: Optional[str] = None):
         """
-        Plot 3D trajectory.
+        Plot positioning error metrics over time.
+        X-axis: Time, Y-axis: Various positioning error metrics
         
         Args:
             save_path: Path to save the figure
         """
-        fig = plt.figure(figsize=(12, 10))
+        rel_time, errors = self.compute_positioning_error_over_time()
+        has_gt = self.aligned_gt is not None
+        
+        if has_gt:
+            fig, axes = plt.subplots(4, 2, figsize=(16, 14))
+        else:
+            fig, axes = plt.subplots(3, 2, figsize=(16, 11))
+        
+        fig.suptitle('Positioning Error Analysis Over Time', fontsize=14, fontweight='bold')
+        
+        # Color scheme
+        colors = {
+            'drift': '#e74c3c',
+            'x': '#3498db', 
+            'y': '#27ae60',
+            'z': '#9b59b6',
+            'total': '#e67e22',
+            'velocity': '#1abc9c'
+        }
+        
+        # Plot 1: Drift from start position
+        ax = axes[0, 0]
+        ax.plot(rel_time, errors['drift_from_start'], color=colors['drift'], linewidth=2)
+        ax.fill_between(rel_time, 0, errors['drift_from_start'], alpha=0.3, color=colors['drift'])
+        ax.set_xlabel('Time (s)')
+        ax.set_ylabel('Distance from Start (m)')
+        ax.set_title('Drift from Starting Position', fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        
+        # Plot 2: Per-axis displacement from start
+        ax = axes[0, 1]
+        ax.plot(rel_time, errors['x_displacement'], color=colors['x'], linewidth=2, label='X')
+        ax.plot(rel_time, errors['y_displacement'], color=colors['y'], linewidth=2, label='Y')
+        ax.plot(rel_time, errors['z_displacement'], color=colors['z'], linewidth=2, label='Z')
+        ax.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
+        ax.set_xlabel('Time (s)')
+        ax.set_ylabel('Displacement (m)')
+        ax.set_title('Per-Axis Displacement from Start', fontweight='bold')
+        ax.legend(loc='best')
+        ax.grid(True, alpha=0.3)
+        
+        # Plot 3: Cumulative distance traveled
+        ax = axes[1, 0]
+        ax.plot(rel_time, errors['cumulative_distance'], color=colors['total'], linewidth=2)
+        ax.fill_between(rel_time, 0, errors['cumulative_distance'], alpha=0.3, color=colors['total'])
+        ax.set_xlabel('Time (s)')
+        ax.set_ylabel('Cumulative Distance (m)')
+        ax.set_title('Total Distance Traveled', fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        
+        # Plot 4: Velocity over time
+        ax = axes[1, 1]
+        ax.plot(rel_time, errors['velocity'], color=colors['velocity'], linewidth=1.5, alpha=0.7)
+        ax.axhline(y=np.mean(errors['velocity']), color='red', linestyle='--', 
+                  label=f'Mean: {np.mean(errors["velocity"]):.2f} m/s')
+        ax.set_xlabel('Time (s)')
+        ax.set_ylabel('Velocity (m/s)')
+        ax.set_title('Instantaneous Velocity', fontweight='bold')
+        ax.legend(loc='best')
+        ax.grid(True, alpha=0.3)
+        
+        # Plot 5: Drift percentage over distance
+        ax = axes[2, 0]
+        drift_percent = (errors['drift_from_start'] / (errors['cumulative_distance'] + 1e-6)) * 100
+        ax.plot(rel_time, drift_percent, color='#8e44ad', linewidth=2)
+        ax.set_xlabel('Time (s)')
+        ax.set_ylabel('Drift / Distance (%)')
+        ax.set_title('Drift Percentage Over Time', fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim([0, min(100, np.percentile(drift_percent, 99))])
+        
+        # Plot 6: Position uncertainty (approximated by velocity variance)
+        ax = axes[2, 1]
+        window = min(50, len(errors['velocity']) // 10)
+        if window > 1:
+            vel_std = pd.Series(errors['velocity']).rolling(window=window, center=True).std().fillna(0).to_numpy()
+            ax.plot(rel_time, vel_std, color='#c0392b', linewidth=2)
+            ax.fill_between(rel_time, 0, vel_std, alpha=0.3, color='#c0392b')
+        ax.set_xlabel('Time (s)')
+        ax.set_ylabel('Velocity Std Dev (m/s)')
+        ax.set_title('Motion Smoothness (Rolling Velocity Std)', fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        
+        # If ground truth available, add ATE plots
+        if has_gt:
+            # Plot 7: ATE over time
+            ax = axes[3, 0]
+            ax.plot(rel_time, errors['ate'], color='#e74c3c', linewidth=2, label='Total ATE')
+            ax.axhline(y=np.mean(errors['ate']), color='black', linestyle='--',
+                      label=f'Mean: {np.mean(errors["ate"]):.4f} m')
+            ax.fill_between(rel_time, 0, errors['ate'], alpha=0.3, color='#e74c3c')
+            ax.set_xlabel('Time (s)')
+            ax.set_ylabel('ATE (m)')
+            ax.set_title('Absolute Trajectory Error (ATE) Over Time', fontweight='bold')
+            ax.legend(loc='best')
+            ax.grid(True, alpha=0.3)
+            
+            # Plot 8: Per-axis ATE
+            ax = axes[3, 1]
+            ax.plot(rel_time, errors['ate_x'], color=colors['x'], linewidth=2, label='X Error')
+            ax.plot(rel_time, errors['ate_y'], color=colors['y'], linewidth=2, label='Y Error')
+            ax.plot(rel_time, errors['ate_z'], color=colors['z'], linewidth=2, label='Z Error')
+            ax.set_xlabel('Time (s)')
+            ax.set_ylabel('Error (m)')
+            ax.set_title('Per-Axis Absolute Trajectory Error', fontweight='bold')
+            ax.legend(loc='best')
+            ax.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        
+        if save_path:
+            plt.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='white')
+            print(f"Saved positioning error plot to {save_path}")
+        plt.close()
+    
+    def plot_trajectory_3d(self, save_path: Optional[str] = None):
+        """
+        Plot 3D trajectory with ground truth comparison.
+        
+        Args:
+            save_path: Path to save the figure
+        """
+        fig = plt.figure(figsize=(14, 10))
         ax = fig.add_subplot(111, projection='3d')
         
         est_pos = self.est_trajectory[:, 1:4]
+        has_gt = self.aligned_gt is not None
         
         # Color by time
         timestamps = self.est_trajectory[:, 0]
         colors = (timestamps - timestamps[0]) / (timestamps[-1] - timestamps[0])
         
+        # Plot estimated trajectory
         scatter = ax.scatter(est_pos[:, 0], est_pos[:, 1], est_pos[:, 2],
-                           c=colors, cmap='viridis', s=2, alpha=0.6)
+                           c=colors, cmap='viridis', s=3, alpha=0.6, label='VINs Estimate')
         
-        # Start and end markers
-        ax.scatter(*est_pos[0], color='green', s=100, marker='o', label='Start')
-        ax.scatter(*est_pos[-1], color='red', s=100, marker='^', label='End')
+        # Plot line connecting points
+        ax.plot(est_pos[:, 0], est_pos[:, 1], est_pos[:, 2],
+               'b-', linewidth=0.5, alpha=0.3)
         
-        if self.aligned_gt is not None:
+        # Plot ground truth if available
+        if has_gt:
             gt_pos = self.aligned_gt[:, 1:4]
             ax.plot(gt_pos[:, 0], gt_pos[:, 1], gt_pos[:, 2],
-                   'g--', linewidth=1, alpha=0.5, label='Ground Truth')
+                   'g--', linewidth=2, alpha=0.7, label='Ground Truth')
         
-        ax.set_xlabel('X (m)')
-        ax.set_ylabel('Y (m)')
-        ax.set_zlabel('Z (m)')
-        ax.set_title('OpenVINS 3D Trajectory', fontsize=14, fontweight='bold')
-        ax.legend()
+        # Start and end markers
+        ax.scatter(*est_pos[0], color='green', s=150, marker='o', 
+                  edgecolors='black', linewidths=2, label='Start', zorder=5)
+        ax.scatter(*est_pos[-1], color='red', s=150, marker='^', 
+                  edgecolors='black', linewidths=2, label='End', zorder=5)
+        
+        ax.set_xlabel('X (m)', fontsize=11)
+        ax.set_ylabel('Y (m)', fontsize=11)
+        ax.set_zlabel('Z (m)', fontsize=11)
+        ax.set_title('OpenVINS 3D Trajectory\n(Color = Time Progress)', 
+                    fontsize=14, fontweight='bold')
+        ax.legend(loc='upper left')
         
         # Add colorbar
-        cbar = plt.colorbar(scatter, ax=ax, shrink=0.5, aspect=20)
-        cbar.set_label('Time Progress')
+        cbar = plt.colorbar(scatter, ax=ax, shrink=0.5, aspect=20, pad=0.1)
+        cbar.set_label('Time Progress (normalized)')
         
         plt.tight_layout()
         
         if save_path:
-            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            plt.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='white')
             print(f"Saved 3D trajectory plot to {save_path}")
-        plt.show()
+        plt.close()
     
-    def plot_errors(self, save_path: Optional[str] = None):
+    def plot_comprehensive_metrics(self, save_path: Optional[str] = None):
         """
-        Plot error analysis (position components over time).
+        Plot a comprehensive summary of all metrics.
         
         Args:
             save_path: Path to save the figure
         """
-        fig, axes = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
-        fig.suptitle('OpenVINS Position Components Over Time', fontsize=14, fontweight='bold')
+        # Compute all metrics first
+        stats = self._compute_trajectory_stats()
+        drift = self.compute_drift()
+        vel = self.analyze_velocity()
+        rpe = self.compute_rpe()
         
+        has_gt = self.aligned_gt is not None
+        if has_gt:
+            ate = self.compute_ate()
+        
+        fig = plt.figure(figsize=(16, 12))
+        gs = GridSpec(3, 3, figure=fig, hspace=0.3, wspace=0.3)
+        
+        fig.suptitle('OpenVINS Comprehensive Evaluation Metrics', 
+                    fontsize=16, fontweight='bold', y=0.98)
+        
+        # 1. Trajectory Overview (takes 2 columns)
+        ax1 = fig.add_subplot(gs[0, :2])
+        est_pos = self.est_trajectory[:, 1:4]
+        ax1.plot(est_pos[:, 0], est_pos[:, 1], 'b-', linewidth=2, label='VINs Trajectory')
+        if has_gt:
+            gt_pos = self.aligned_gt[:, 1:4]
+            ax1.plot(gt_pos[:, 0], gt_pos[:, 1], 'g--', linewidth=2, label='Ground Truth')
+        ax1.plot(est_pos[0, 0], est_pos[0, 1], 'go', markersize=10, label='Start')
+        ax1.plot(est_pos[-1, 0], est_pos[-1, 1], 'r^', markersize=10, label='End')
+        ax1.set_xlabel('X (m)')
+        ax1.set_ylabel('Y (m)')
+        ax1.set_title('Top-Down Trajectory View', fontweight='bold')
+        ax1.legend(loc='best')
+        ax1.grid(True, alpha=0.3)
+        ax1.set_aspect('equal', adjustable='datalim')
+        
+        # 2. Metrics Summary Table
+        ax2 = fig.add_subplot(gs[0, 2])
+        ax2.axis('off')
+        
+        metrics_text = f"""
+TRAJECTORY STATISTICS
+━━━━━━━━━━━━━━━━━━━━━
+Duration:        {stats['duration']:.2f} s
+Total Distance:  {stats['total_distance']:.2f} m
+Avg Velocity:    {stats['avg_velocity']:.2f} m/s
+Num Poses:       {stats['num_poses']}
+
+DRIFT ANALYSIS
+━━━━━━━━━━━━━━━━━━━━━
+Total Drift:     {drift['drift_total']:.4f} m
+Drift/Distance:  {drift['drift_per_meter']:.4f} %
+X Drift:         {drift['drift_x']:.4f} m
+Y Drift:         {drift['drift_y']:.4f} m
+Z Drift:         {drift['drift_z']:.4f} m
+
+RPE (Relative Pose Error)
+━━━━━━━━━━━━━━━━━━━━━
+Trans RMSE:      {rpe['rpe_trans_rmse']:.4f} m
+Rot RMSE:        {rpe['rpe_rot_rmse']:.4f} deg
+"""
+        if has_gt:
+            metrics_text += f"""
+ATE (Absolute Trajectory Error)
+━━━━━━━━━━━━━━━━━━━━━
+RMSE:            {ate['ate_rmse']:.4f} m
+Mean:            {ate['ate_mean']:.4f} m
+Max:             {ate['ate_max']:.4f} m
+"""
+        
+        ax2.text(0.05, 0.95, metrics_text, transform=ax2.transAxes,
+                fontsize=9, fontfamily='monospace', verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
+        
+        # 3. Velocity Profile
+        ax3 = fig.add_subplot(gs[1, 0])
         timestamps = self.est_trajectory[:, 0]
         rel_time = timestamps - timestamps[0]
         positions = self.est_trajectory[:, 1:4]
-        
-        labels = ['X', 'Y', 'Z']
-        colors = ['#e74c3c', '#27ae60', '#3498db']
-        
-        for i, (ax, label, color) in enumerate(zip(axes, labels, colors)):
-            ax.plot(rel_time, positions[:, i], color=color, linewidth=1)
-            
-            if self.aligned_gt is not None:
-                gt_rel_time = self.aligned_gt[:, 0] - self.aligned_gt[0, 0]
-                ax.plot(gt_rel_time, self.aligned_gt[:, i+1], 
-                       color=color, linestyle='--', alpha=0.5, label='GT')
-                       
-            ax.set_ylabel(f'{label} (m)')
-            ax.grid(True, alpha=0.3)
-            ax.legend(loc='upper right')
-            
-        axes[-1].set_xlabel('Time (s)')
-        
-        plt.tight_layout()
-        
-        if save_path:
-            plt.savefig(save_path, dpi=150, bbox_inches='tight')
-            print(f"Saved error plot to {save_path}")
-        plt.show()
-    
-    def plot_velocity_profile(self, save_path: Optional[str] = None):
-        """
-        Plot velocity profile over time.
-        
-        Args:
-            save_path: Path to save the figure
-        """
-        positions = self.est_trajectory[:, 1:4]
-        timestamps = self.est_trajectory[:, 0]
-        
         dt = np.diff(timestamps)
         dt[dt < 1e-6] = 1e-6
+        velocities = np.linalg.norm(np.diff(positions, axis=0), axis=1) / dt
+        ax3.plot(rel_time[:-1], velocities, 'b-', linewidth=1, alpha=0.7)
+        ax3.axhline(y=vel['vel_mean'], color='r', linestyle='--', 
+                   label=f'Mean: {vel["vel_mean"]:.2f} m/s')
+        ax3.fill_between(rel_time[:-1], 0, velocities, alpha=0.3)
+        ax3.set_xlabel('Time (s)')
+        ax3.set_ylabel('Velocity (m/s)')
+        ax3.set_title('Velocity Profile', fontweight='bold')
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
         
-        dp = np.diff(positions, axis=0)
-        velocities = np.linalg.norm(dp, axis=1) / dt
-        vel_times = timestamps[:-1] - timestamps[0]
+        # 4. Drift from Start
+        ax4 = fig.add_subplot(gs[1, 1])
+        drift_from_start = np.linalg.norm(positions - positions[0], axis=1)
+        ax4.plot(rel_time, drift_from_start, 'r-', linewidth=2)
+        ax4.fill_between(rel_time, 0, drift_from_start, alpha=0.3, color='red')
+        ax4.set_xlabel('Time (s)')
+        ax4.set_ylabel('Distance from Start (m)')
+        ax4.set_title('Drift from Starting Position', fontweight='bold')
+        ax4.grid(True, alpha=0.3)
         
-        fig, axes = plt.subplots(2, 1, figsize=(12, 8))
-        fig.suptitle('OpenVINS Velocity Analysis', fontsize=14, fontweight='bold')
+        # 5. Height Profile
+        ax5 = fig.add_subplot(gs[1, 2])
+        ax5.plot(rel_time, positions[:, 2], 'purple', linewidth=2)
+        ax5.axhline(y=positions[0, 2], color='gray', linestyle='--', alpha=0.5)
+        ax5.set_xlabel('Time (s)')
+        ax5.set_ylabel('Z Height (m)')
+        ax5.set_title('Height Profile', fontweight='bold')
+        ax5.grid(True, alpha=0.3)
         
-        # Velocity over time
-        axes[0].plot(vel_times, velocities, 'b-', linewidth=1, alpha=0.7)
-        axes[0].axhline(y=np.mean(velocities), color='r', linestyle='--', 
-                       label=f'Mean: {np.mean(velocities):.2f} m/s')
-        axes[0].fill_between(vel_times, 0, velocities, alpha=0.3)
-        axes[0].set_xlabel('Time (s)')
-        axes[0].set_ylabel('Velocity (m/s)')
-        axes[0].set_title('Velocity Profile')
-        axes[0].legend()
-        axes[0].grid(True, alpha=0.3)
+        # 6. Position Error (ATE) over time if GT available
+        ax6 = fig.add_subplot(gs[2, 0])
+        if has_gt:
+            aligned_pos = self.aligned_est[:, 1:4]
+            gt_pos = self.aligned_gt[:, 1:4]
+            pos_errors = np.linalg.norm(aligned_pos - gt_pos, axis=1)
+            error_times = self.aligned_est[:, 0] - self.aligned_est[0, 0]
+            ax6.plot(error_times, pos_errors, 'r-', linewidth=2)
+            ax6.axhline(y=ate['ate_mean'], color='black', linestyle='--',
+                       label=f'Mean: {ate["ate_mean"]:.4f} m')
+            ax6.fill_between(error_times, 0, pos_errors, alpha=0.3, color='red')
+            ax6.set_title('ATE Over Time', fontweight='bold')
+            ax6.legend()
+        else:
+            cumulative_dist = np.concatenate([[0], np.cumsum(np.linalg.norm(np.diff(positions, axis=0), axis=1))])
+            ax6.plot(rel_time, cumulative_dist, 'orange', linewidth=2)
+            ax6.fill_between(rel_time, 0, cumulative_dist, alpha=0.3, color='orange')
+            ax6.set_title('Cumulative Distance', fontweight='bold')
+        ax6.set_xlabel('Time (s)')
+        ax6.set_ylabel('Error/Distance (m)')
+        ax6.grid(True, alpha=0.3)
         
-        # Velocity histogram
-        axes[1].hist(velocities, bins=50, color='steelblue', edgecolor='black', alpha=0.7)
-        axes[1].axvline(x=np.mean(velocities), color='r', linestyle='--', 
-                       label=f'Mean: {np.mean(velocities):.2f}')
-        axes[1].axvline(x=np.median(velocities), color='g', linestyle='--', 
-                       label=f'Median: {np.median(velocities):.2f}')
-        axes[1].set_xlabel('Velocity (m/s)')
-        axes[1].set_ylabel('Count')
-        axes[1].set_title('Velocity Distribution')
-        axes[1].legend()
-        axes[1].grid(True, alpha=0.3)
+        # 7. Per-axis position over time
+        ax7 = fig.add_subplot(gs[2, 1])
+        ax7.plot(rel_time, positions[:, 0], 'r-', linewidth=1.5, label='X')
+        ax7.plot(rel_time, positions[:, 1], 'g-', linewidth=1.5, label='Y')
+        ax7.plot(rel_time, positions[:, 2], 'b-', linewidth=1.5, label='Z')
+        ax7.set_xlabel('Time (s)')
+        ax7.set_ylabel('Position (m)')
+        ax7.set_title('Position Components Over Time', fontweight='bold')
+        ax7.legend()
+        ax7.grid(True, alpha=0.3)
+        
+        # 8. Velocity histogram
+        ax8 = fig.add_subplot(gs[2, 2])
+        ax8.hist(velocities, bins=30, color='steelblue', edgecolor='black', alpha=0.7)
+        ax8.axvline(x=vel['vel_mean'], color='r', linestyle='--', 
+                   label=f'Mean: {vel["vel_mean"]:.2f}')
+        ax8.axvline(x=vel['vel_median'], color='g', linestyle='--', 
+                   label=f'Median: {vel["vel_median"]:.2f}')
+        ax8.set_xlabel('Velocity (m/s)')
+        ax8.set_ylabel('Count')
+        ax8.set_title('Velocity Distribution', fontweight='bold')
+        ax8.legend()
+        ax8.grid(True, alpha=0.3)
         
         plt.tight_layout()
         
         if save_path:
-            plt.savefig(save_path, dpi=150, bbox_inches='tight')
-            print(f"Saved velocity profile to {save_path}")
-        plt.show()
+            plt.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='white')
+            print(f"Saved comprehensive metrics plot to {save_path}")
+        plt.close()
     
     def generate_report(self, output_dir: str = '.'):
         """
@@ -588,6 +863,10 @@ class TrajectoryEvaluator:
             output_dir: Directory to save the report and figures
         """
         os.makedirs(output_dir, exist_ok=True)
+        
+        # Align trajectories first if ground truth available
+        if self.gt_trajectory is not None:
+            self.align_trajectories()
         
         # Compute all metrics
         print("\n" + "="*60)
@@ -641,67 +920,56 @@ class TrajectoryEvaluator:
             yaml.dump(self.metrics, f, default_flow_style=False)
         print(f"\n💾 Metrics saved to {metrics_file}")
         
-        # Generate plots
+        # Generate all plots
         print("\n📊 Generating plots...")
-        self.plot_trajectory_2d(os.path.join(output_dir, 'trajectory_2d.png'))
+        
+        # 1. 2D trajectory with GT comparison
+        self.plot_trajectory_2d_with_gt(os.path.join(output_dir, 'trajectory_2d_vins_gt.png'))
+        
+        # 2. 3D trajectory
         self.plot_trajectory_3d(os.path.join(output_dir, 'trajectory_3d.png'))
-        self.plot_errors(os.path.join(output_dir, 'position_components.png'))
-        self.plot_velocity_profile(os.path.join(output_dir, 'velocity_profile.png'))
+        
+        # 3. Positioning error over time
+        self.plot_positioning_error_over_time(os.path.join(output_dir, 'positioning_error_over_time.png'))
+        
+        # 4. Comprehensive metrics summary
+        self.plot_comprehensive_metrics(os.path.join(output_dir, 'comprehensive_metrics.png'))
         
         print("\n✅ Evaluation complete!")
+        print(f"\n📁 All results saved to: {output_dir}/")
+        print("   - trajectory_2d_vins_gt.png")
+        print("   - trajectory_3d.png")
+        print("   - positioning_error_over_time.png")
+        print("   - comprehensive_metrics.png")
+        print("   - evaluation_metrics.yaml")
+        
         return self.metrics
 
 
-def record_trajectory_from_ros(output_file: str, topic: str = '/ov_msckf/odomimu',
-                               duration: float = 60.0):
+def create_sample_ground_truth(est_trajectory: np.ndarray, noise_level: float = 0.1) -> np.ndarray:
     """
-    Record trajectory from ROS2 topic to TUM format file.
+    Create a simulated ground truth trajectory for demonstration.
+    Adds small random offsets to simulate sensor drift.
     
     Args:
-        output_file: Output file path
-        topic: ROS2 odometry topic
-        duration: Recording duration in seconds
+        est_trajectory: Estimated trajectory array
+        noise_level: Standard deviation of noise to add
+        
+    Returns:
+        Simulated ground truth trajectory
     """
-    try:
-        import rclpy
-        from rclpy.node import Node
-        from nav_msgs.msg import Odometry
-        
-        class TrajectoryRecorder(Node):
-            def __init__(self):
-                super().__init__('trajectory_recorder')
-                self.poses = []
-                self.subscription = self.create_subscription(
-                    Odometry, topic, self.odom_callback, 10)
-                print(f"Recording from {topic} for {duration}s...")
-                
-            def odom_callback(self, msg):
-                t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-                p = msg.pose.pose.position
-                q = msg.pose.pose.orientation
-                self.poses.append([t, p.x, p.y, p.z, q.x, q.y, q.z, q.w])
-                
-            def save(self, filepath):
-                if self.poses:
-                    np.savetxt(filepath, np.array(self.poses), 
-                              fmt='%.9f %.9f %.9f %.9f %.9f %.9f %.9f %.9f')
-                    print(f"Saved {len(self.poses)} poses to {filepath}")
-                    
-        rclpy.init()
-        recorder = TrajectoryRecorder()
-        
-        import time
-        start = time.time()
-        while time.time() - start < duration:
-            rclpy.spin_once(recorder, timeout_sec=0.1)
-            
-        recorder.save(output_file)
-        recorder.destroy_node()
-        rclpy.shutdown()
-        
-    except ImportError:
-        print("ROS2 not available. Use --input to provide a trajectory file.")
-        sys.exit(1)
+    gt = est_trajectory.copy()
+    
+    # Add smooth bias to simulate systematic error
+    n = len(gt)
+    t = np.linspace(0, 1, n)
+    
+    # Add sinusoidal drift pattern
+    gt[:, 1] += noise_level * np.sin(2 * np.pi * t) * 0.5  # X bias
+    gt[:, 2] += noise_level * np.cos(2 * np.pi * t) * 0.5  # Y bias
+    gt[:, 3] += noise_level * 0.2 * t  # Z drift
+    
+    return gt
 
 
 def main():
@@ -713,11 +981,11 @@ Examples:
   # Evaluate from file
   python evaluate_openvins.py --input trajectory.txt --output results/
 
-  # Record and evaluate
-  python evaluate_openvins.py --record --duration 60 --output results/
-
   # Compare with ground truth
   python evaluate_openvins.py --input est.txt --groundtruth gt.txt --output results/
+  
+  # Generate demo with simulated ground truth
+  python evaluate_openvins.py --input trajectory.txt --demo --output results/
         """
     )
     
@@ -727,12 +995,8 @@ Examples:
                        help='Ground truth trajectory file (TUM format)')
     parser.add_argument('--output', '-o', type=str, default='./evaluation_results',
                        help='Output directory for results')
-    parser.add_argument('--record', action='store_true',
-                       help='Record trajectory from ROS2 topic')
-    parser.add_argument('--topic', type=str, default='/ov_msckf/odomimu',
-                       help='ROS2 topic for recording')
-    parser.add_argument('--duration', type=float, default=60.0,
-                       help='Recording duration in seconds')
+    parser.add_argument('--demo', action='store_true',
+                       help='Generate demo with simulated ground truth')
     
     args = parser.parse_args()
     
@@ -740,15 +1004,13 @@ Examples:
     os.makedirs(args.output, exist_ok=True)
     
     # Determine input file
-    if args.record:
-        input_file = os.path.join(args.output, 'recorded_trajectory.txt')
-        record_trajectory_from_ros(input_file, args.topic, args.duration)
-    elif args.input:
+    if args.input:
         input_file = args.input
     else:
         # Try to find a trajectory file in common locations
         common_paths = [
             'trajectory.txt',
+            'sample_trajectory.txt',
             'estimated_trajectory.txt',
             'ov_estimate.txt',
             '/tmp/ov_estimate.txt'
@@ -760,18 +1022,29 @@ Examples:
                 break
                 
         if input_file is None:
-            print("Error: No trajectory file found. Use --input or --record")
+            print("Error: No trajectory file found. Use --input to specify one.")
             sys.exit(1)
+    
+    # Handle ground truth
+    gt_file = args.groundtruth
     
     # Run evaluation
     try:
-        evaluator = TrajectoryEvaluator(input_file, args.groundtruth)
+        evaluator = TrajectoryEvaluator(input_file, gt_file)
+        
+        # If demo mode, create simulated ground truth
+        if args.demo and gt_file is None:
+            print("\n🎮 Demo mode: Creating simulated ground truth for demonstration")
+            evaluator.gt_trajectory = create_sample_ground_truth(evaluator.est_trajectory)
+            
         evaluator.generate_report(args.output)
+        
     except Exception as e:
         print(f"Error during evaluation: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 
 if __name__ == '__main__':
     main()
-
